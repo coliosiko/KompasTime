@@ -46,20 +46,22 @@ function Get-InstalledKompasVersions {
     }
 }
 
-function Update-KompasMenu([string]$KitPath, [bool]$Remove, [string]$DefaultKitPath) {
+function Update-KompasMenu([string]$KitPath, [bool]$Remove, [string]$DefaultKitPath, [switch]$ValidateOnly) {
     $kit = New-Object System.Xml.XmlDocument
     $kit.PreserveWhitespace = $true
     if (Test-Path -LiteralPath $kitPath) {
-        $kit.Load($kitPath)
+        try { $kit.Load($kitPath) }
+        catch { throw "Could not read KOMPAS application list '$kitPath': $($_.Exception.Message)" }
     }
     elseif ($Remove) { return }
     elseif ($DefaultKitPath -and (Test-Path -LiteralPath $DefaultKitPath -PathType Leaf)) {
-        $kit.Load($DefaultKitPath)
+        try { $kit.Load($DefaultKitPath) }
+        catch { throw "Could not read default KOMPAS application list '$DefaultKitPath': $($_.Exception.Message)" }
     }
     else {
         $kit.LoadXml('<?xml version="1.0" encoding="utf-16"?><Kit_Config><Version>1.0</Version><Groups><Group/></Groups></Kit_Config>')
     }
-    if ($kit.DocumentElement.Name -ne 'Kit_Config') {
+    if ($kit.DocumentElement.Name -ne 'Kit_Config' -or $kit.DocumentElement.NamespaceURI) {
         if ($Remove) { return }
         throw "Unsupported KOMPAS application list format: $kitPath"
     }
@@ -80,8 +82,14 @@ function Update-KompasMenu([string]$KitPath, [bool]$Remove, [string]$DefaultKitP
             $duplicate.ParentNode.RemoveChild($duplicate) | Out-Null
         }
         if ($null -eq $node) {
-            $group = $kit.SelectSingleNode('/Kit_Config/Groups/Group')
-            if ($null -eq $group) { throw 'Unsupported KOMPAS application list format.' }
+            $groups = $kit.SelectSingleNode('/Kit_Config/Groups')
+            if ($null -eq $groups) {
+                $groups = $kit.DocumentElement.AppendChild($kit.CreateElement('Groups'))
+            }
+            $group = $groups.SelectSingleNode('Group')
+            if ($null -eq $group) {
+                $group = $groups.AppendChild($kit.CreateElement('Group'))
+            }
             $node = $kit.CreateElement('Application')
             $group.AppendChild($node) | Out-Null
         }
@@ -93,6 +101,7 @@ function Update-KompasMenu([string]$KitPath, [bool]$Remove, [string]$DefaultKitP
         $node.SetAttribute('autostart', 'true')
     }
 
+    if ($ValidateOnly) { return }
     New-Item -ItemType Directory -Path (Split-Path -Parent $kitPath) -Force | Out-Null
     $temp = $kitPath + '.KompasTime.' + [guid]::NewGuid().ToString('N') + '.tmp'
     try {
@@ -209,6 +218,16 @@ try {
             throw 'Extract the complete installation archive first.'
         }
     }
+    $kits = foreach ($target in $targets) {
+        @{
+            KitPath = Join-Path $kitRoot "$target\KOMPAS.kit.config"
+            DefaultKitPath = Join-Path $env:ProgramData "ASCON\KOMPAS-3D\$target\base.kit.config"
+            Remove = $false
+        }
+    }
+    foreach ($kit in $kits) {
+        Update-KompasMenu @kit -ValidateOnly
+    }
     $needsCopy = @($files | Where-Object {
         $installed = Join-Path $installDir $_
         !(Test-Path -LiteralPath $installed) -or
@@ -241,10 +260,9 @@ try {
     }
     Get-Process 'KompasTime.Connector' -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -eq $connector } | Stop-Process
-    foreach ($target in $targets) {
-        $defaultKit = Join-Path $env:ProgramData "ASCON\KOMPAS-3D\$target\base.kit.config"
-        Update-KompasMenu -KitPath (Join-Path $kitRoot "$target\KOMPAS.kit.config") -Remove $false -DefaultKitPath $defaultKit
-        Write-Host "KompasTime configured for KOMPAS-3D v$target."
+    foreach ($kit in $kits) {
+        Update-KompasMenu @kit
+        Write-Host "KompasTime configured in $($kit.KitPath)."
     }
     $settings = New-Item -Path $settingsKey -Force
     if ($null -eq $settings.GetValue('AutoConnect')) {
