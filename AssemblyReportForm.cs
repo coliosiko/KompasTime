@@ -6,12 +6,15 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using IApplication = KompasAPI7.IApplication;
 
 namespace KompasTime;
 
 internal sealed class AssemblyReportForm : Form
 {
     private readonly string root;
+    private readonly IReadOnlyList<string>? files;
+    private readonly IApplication application;
     private readonly IReadOnlyDictionary<string, long?> savedInOpenDocuments;
     private readonly CancellationTokenSource cancellation = new();
     private readonly TreeView tree = new() { Dock = DockStyle.Fill, ShowNodeToolTips = true };
@@ -21,12 +24,23 @@ internal sealed class AssemblyReportForm : Form
     private readonly Button export = new() { Text = "Экспорт в Excel", AutoSize = true, Visible = false };
     private AssemblyReport? completedReport;
     private bool running = true;
-    public event Action? Finished;
+    private bool closeAfterCancellation;
+    public AssemblyReportForm(IReadOnlyList<string> files, IReadOnlyDictionary<string, long?> savedInOpenDocuments,
+        IApplication application) : this("", savedInOpenDocuments, application)
+    {
+        this.files = files;
+        Text = "Результат отчёта по файлам";
+        StartPosition = FormStartPosition.CenterScreen;
+        ShowInTaskbar = true;
+        status.Text = "Чтение трудозатрат…";
+    }
 
-    public AssemblyReportForm(string root, IReadOnlyDictionary<string, long?> savedInOpenDocuments)
+    public AssemblyReportForm(string root, IReadOnlyDictionary<string, long?> savedInOpenDocuments,
+        IApplication application)
     {
         this.root = root;
         this.savedInOpenDocuments = savedInOpenDocuments;
+        this.application = application;
         Text = $"Сводный отчёт · {Path.GetFileName(root)}";
         Font = new Font("Segoe UI", 10);
         ClientSize = new Size(740, 470);
@@ -57,6 +71,7 @@ internal sealed class AssemblyReportForm : Form
             if (running)
             {
                 args.Cancel = true;
+                closeAfterCancellation = files != null;
                 RequestStop();
             }
         };
@@ -80,10 +95,21 @@ internal sealed class AssemblyReportForm : Form
         {
             var result = await RunOnSta(updates, cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
-            var rootNode = MakeNode(result.Root);
-            tree.Nodes.Add(rootNode);
-            rootNode.Expand();
-            var total = MainForm.Format(TimeSpan.FromSeconds(result.TotalSeconds));
+            tree.BeginUpdate();
+            try
+            {
+                if (result.IsFlat)
+                    foreach (var file in result.Root.Children)
+                        tree.Nodes.Add(MakeNode(file));
+                else
+                {
+                    var rootNode = MakeNode(result.Root);
+                    tree.Nodes.Add(rootNode);
+                    rootNode.Expand();
+                }
+            }
+            finally { tree.EndUpdate(); }
+            var total = WorkDuration.Format(result.TotalSeconds);
             status.Text = result.Incomplete ? $"Итого по доступным данным: {total}" : $"Итого: {total}";
             completedReport = result;
             export.Visible = true;
@@ -101,7 +127,8 @@ internal sealed class AssemblyReportForm : Form
             running = false;
             progress.Visible = false;
             stop.Visible = false;
-            Finished?.Invoke();
+            if (closeAfterCancellation)
+                Close();
         }
     }
 
@@ -116,7 +143,7 @@ internal sealed class AssemblyReportForm : Form
             DefaultExt = "xlsx",
             AddExtension = true,
             RestoreDirectory = true,
-            FileName = Path.GetFileNameWithoutExtension(root) + " — трудозатраты.xlsx"
+            FileName = files == null ? Path.GetFileNameWithoutExtension(root) + " — трудозатраты.xlsx" : "Трудозатраты по файлам.xlsx"
         };
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
@@ -148,14 +175,17 @@ internal sealed class AssemblyReportForm : Form
             var throttle = Stopwatch.StartNew();
             try
             {
-                var report = AssemblyReport.Build(root, savedInOpenDocuments, token, (done, found) =>
+                void ReportProgress(int done, int found)
                 {
                     if (done == 1 || throttle.ElapsedMilliseconds >= 80)
                     {
                         updates.Report((done, found));
                         throttle.Restart();
                     }
-                });
+                }
+                var report = files == null
+                    ? AssemblyReport.Build(root, savedInOpenDocuments, token, ReportProgress, application)
+                    : AssemblyReport.BuildFiles(files, savedInOpenDocuments, token, ReportProgress, application);
                 completion.SetResult(report);
             }
             catch (OperationCanceledException)
@@ -185,7 +215,7 @@ internal sealed class AssemblyReportForm : Form
 
     private static TreeNode MakeNode(ReportNode file)
     {
-        var value = file.Seconds.HasValue ? MainForm.Format(TimeSpan.FromSeconds(file.Seconds.Value))
+        var value = file.Seconds.HasValue ? WorkDuration.Format(file.Seconds.Value)
             : file.Unavailable ? "недоступен" : "нет данных";
         var tooltip = file.Path;
         if (file.Repeat)

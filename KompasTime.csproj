@@ -1,13 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
     <TargetFramework>net48</TargetFramework>
+    <Version>0.2.0</Version>
+    <AssemblyName>KompasTime.Pane</AssemblyName>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <PlatformTarget>x64</PlatformTarget>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/bin/**;**/obj/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="README.md" LogicalName="KompasTime.README.md" />
     <Reference Include="System.Runtime.Serialization" />
     <Reference Include="System.IO.Compression" />
     <COMReference Include="KompasAPI7">
@@ -19,6 +22,13 @@
     </COMReference>
     <COMReference Include="Kompas6Constants">
       <Guid>{75C9F5D0-B5B8-4526-8681-9903C567D2ED}</Guid>
+      <VersionMajor>1</VersionMajor>
+      <VersionMinor>0</VersionMinor>
+      <WrapperTool>tlbimp</WrapperTool>
+      <EmbedInteropTypes>true</EmbedInteropTypes>
+    </COMReference>
+    <COMReference Include="KompasLibrary">
+      <Guid>{C1633829-7BB0-4E69-8ED4-043ADB7E8090}</Guid>
       <VersionMajor>1</VersionMajor>
       <VersionMinor>0</VersionMinor>
       <WrapperTool>tlbimp</WrapperTool>

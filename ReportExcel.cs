@@ -82,12 +82,12 @@ internal static class ReportExcel
         using var stream = archive.CreateEntry("xl/worksheets/sheet1.xml").Open();
         using var xml = XmlWriter.Create(stream);
         xml.WriteStartElement("worksheet", SheetNamespace);
-        xml.WriteRaw("""
+        xml.WriteRaw($"""
             <sheetPr><outlinePr summaryBelow="0"/></sheetPr>
             <cols>
               <col min="1" max="1" width="60" customWidth="1"/>
               <col min="2" max="2" width="19" customWidth="1"/>
-              <col min="3" max="3" width="12" customWidth="1"/>
+              <col min="3" max="3" width="{(report.IsFlat ? 70 : 12)}" customWidth="1"/>
             </cols>
             """);
         xml.WriteStartElement("sheetData", SheetNamespace);
@@ -95,7 +95,7 @@ internal static class ReportExcel
         xml.WriteStartElement("row", SheetNamespace);
         Text(xml, "Файл", 2);
         Text(xml, "Трудозатраты", 2);
-        Text(xml, "Уровень", 2);
+        Text(xml, report.IsFlat ? "Путь" : "Уровень", 2);
         xml.WriteEndElement();
         xml.WriteStartElement("row", SheetNamespace);
         Text(xml, report.Incomplete ? "Итого по доступным данным" : "Итого", 2);
@@ -103,7 +103,13 @@ internal static class ReportExcel
         xml.WriteEndElement();
 
         var pending = new Stack<(ReportNode Node, int Depth)>();
-        pending.Push((report.Root, 0));
+        if (report.IsFlat)
+        {
+            for (var index = report.Root.Children.Count - 1; index >= 0; index--)
+                pending.Push((report.Root.Children[index], 0));
+        }
+        else
+            pending.Push((report.Root, 0));
         var row = 2;
         while (pending.Count > 0)
         {
@@ -120,7 +126,10 @@ internal static class ReportExcel
                 Duration(xml, seconds);
             else
                 Text(xml, node.Unavailable ? "недоступен" : "нет данных");
-            Number(xml, depth.ToString(CultureInfo.InvariantCulture));
+            if (report.IsFlat)
+                Text(xml, node.Path);
+            else
+                Number(xml, depth.ToString(CultureInfo.InvariantCulture));
             xml.WriteEndElement();
 
             for (var index = node.Children.Count - 1; index >= 0; index--)

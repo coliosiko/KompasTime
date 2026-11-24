@@ -76,7 +76,7 @@ internal sealed class HistoryForm : Form
         foreach (var entry in history.VisibleEntries.OrderByDescending(entry => entry.SavedAtUtc))
         {
             var date = entry.SavedAtUtc.ToLocalTime().ToString("dd.MM.yy HH:mm", CultureInfo.InvariantCulture);
-            var row = grid.Rows.Add(entry.AuthorName, date, MainForm.Format(TimeSpan.FromSeconds(entry.TotalSeconds)));
+            var row = grid.Rows.Add(entry.AuthorName, date, WorkDuration.Format(entry.TotalSeconds));
             grid.Rows[row].Tag = entry;
         }
         grid.ClearSelection();

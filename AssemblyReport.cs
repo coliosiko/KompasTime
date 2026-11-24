@@ -28,6 +28,7 @@ internal sealed class AssemblyReport
     public ReportNode Root { get; }
     public long TotalSeconds { get; private set; }
     public bool Incomplete { get; private set; }
+    public bool IsFlat { get; private set; }
 
     private AssemblyReport(string root) => Root = new ReportNode(root);
 
@@ -36,12 +37,34 @@ internal sealed class AssemblyReport
         ".a3d", ".m3d", ".cdw", ".spw", ".frw", ".kdw"
     };
 
+    public static bool IsKompasFile(string path) =>
+        Extensions.Contains(Path.GetExtension(path)) ||
+        string.Equals(Path.GetExtension(path), ".t3d", StringComparison.OrdinalIgnoreCase);
+
     public static AssemblyReport Build(string rootPath, IReadOnlyDictionary<string, long?> savedInOpenDocuments,
-        CancellationToken cancellation, Action<int, int> progress)
+        CancellationToken cancellation, Action<int, int> progress, IApplication application) =>
+        BuildCore(new AssemblyReport(Path.GetFullPath(rootPath)), savedInOpenDocuments, cancellation, progress, application);
+
+    public static AssemblyReport BuildFiles(IReadOnlyList<string> paths, IReadOnlyDictionary<string, long?> savedInOpenDocuments,
+        CancellationToken cancellation, Action<int, int> progress, IApplication application)
+    {
+        var report = new AssemblyReport("") { IsFlat = true };
+        var unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in paths)
+        {
+            cancellation.ThrowIfCancellationRequested();
+            var fullPath = Path.GetFullPath(path);
+            if (unique.Add(fullPath))
+                report.Root.Children.Add(new ReportNode(fullPath));
+        }
+        return BuildCore(report, savedInOpenDocuments, cancellation, progress, application);
+    }
+
+    private static AssemblyReport BuildCore(AssemblyReport result, IReadOnlyDictionary<string, long?> savedInOpenDocuments,
+        CancellationToken cancellation, Action<int, int> progress, IApplication application)
     {
         cancellation.ThrowIfCancellationRequested();
-        var app = (IApplication)Marshal.GetActiveObject("KOMPAS.Application.7");
-        var documents = app.Documents;
+        var documents = application.Documents;
         var open = new Dictionary<string, IKompasDocument>(StringComparer.OrdinalIgnoreCase);
         foreach (var item in (IEnumerable)documents)
         {
@@ -60,10 +83,15 @@ internal sealed class AssemblyReport
             }
         }
 
-        var result = new AssemblyReport(Path.GetFullPath(rootPath));
         var seen = new Dictionary<string, ReportNode>(StringComparer.OrdinalIgnoreCase);
         var todo = new Stack<ReportNode>();
-        todo.Push(result.Root);
+        if (result.IsFlat)
+        {
+            for (var i = result.Root.Children.Count - 1; i >= 0; i--)
+                todo.Push(result.Root.Children[i]);
+        }
+        else
+            todo.Push(result.Root);
         var processed = 0;
 
         while (todo.Count > 0)
@@ -80,7 +108,7 @@ internal sealed class AssemblyReport
             else
             {
                 seen.Add(node.Path, node);
-                Read(node, documents, open, savedInOpenDocuments, cancellation);
+                Read(node, documents, open, savedInOpenDocuments, cancellation, followLinks: !result.IsFlat);
                 result.TotalSeconds = checked(result.TotalSeconds + (node.Seconds ?? 0));
                 result.Incomplete |= node.Seconds == null || node.Unavailable || node.LinksUnavailable;
                 for (var index = node.Children.Count - 1; index >= 0; index--)
@@ -96,7 +124,7 @@ internal sealed class AssemblyReport
 
     private static void Read(ReportNode node, IDocuments documents,
         Dictionary<string, IKompasDocument> open, IReadOnlyDictionary<string, long?> savedInOpenDocuments,
-        CancellationToken cancellation)
+        CancellationToken cancellation, bool followLinks)
     {
         IKompasDocument? owned = null;
         try
@@ -132,6 +160,8 @@ internal sealed class AssemblyReport
             }
 
             cancellation.ThrowIfCancellationRequested();
+            if (!followLinks)
+                return;
             if (document is not IKompasDocument1 links ||
                 !links.GetExternalFilesNamesEx(false, out var paths, out _))
             {
